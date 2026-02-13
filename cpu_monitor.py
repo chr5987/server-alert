@@ -9,10 +9,12 @@ import threading
 # Configuration from environment variables
 DISCORD_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 USER_ID = int(os.getenv('DISCORD_USER_ID'))
+CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', '0'))  # Optional: channel for alerts
 CPU_THRESHOLD = int(os.getenv('CPU_THRESHOLD', '80'))
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 COOLDOWN_PERIOD = int(os.getenv('COOLDOWN_PERIOD', '300'))  # 5 minutes default
 HTTP_PORT = int(os.getenv('HTTP_PORT', '8080'))
+COMMAND_PREFIX = os.getenv('COMMAND_PREFIX', '!')
 
 class CPUMonitorBot(discord.Client):
     def __init__(self):
@@ -21,6 +23,7 @@ class CPUMonitorBot(discord.Client):
         super().__init__(intents=intents)
         self.last_alert_time = None
         self.user_cache = None
+        self.channel_cache = None
         
     async def on_ready(self):
         print(f'Logged in as {self.user}')
@@ -28,14 +31,26 @@ class CPUMonitorBot(discord.Client):
         print(f'Check interval: {CHECK_INTERVAL} seconds')
         print(f'Alert cooldown: {COOLDOWN_PERIOD} seconds')
         print(f'HTTP endpoint: http://localhost:{HTTP_PORT}')
-        print(f'Commands: !status, !help, or curl http://localhost:{HTTP_PORT}/status')
+        print(f'Command prefix: {COMMAND_PREFIX}')
         
-        # Cache the user object
-        try:
-            self.user_cache = await self.fetch_user(USER_ID)
-            print(f'Cached user: {self.user_cache.name}')
-        except Exception as e:
-            print(f'Warning: Could not cache user: {e}')
+        # Cache the user object for DMs
+        if USER_ID:
+            try:
+                self.user_cache = await self.fetch_user(USER_ID)
+                print(f'Cached DM user: {self.user_cache.name}')
+            except Exception as e:
+                print(f'Warning: Could not cache user: {e}')
+        
+        # Cache the channel object for server alerts
+        if CHANNEL_ID:
+            try:
+                self.channel_cache = await self.fetch_channel(CHANNEL_ID)
+                print(f'Cached alert channel: {self.channel_cache.name} in {self.channel_cache.guild.name}')
+            except Exception as e:
+                print(f'Warning: Could not cache channel: {e}')
+        
+        if not self.user_cache and not self.channel_cache:
+            print('WARNING: No USER_ID or CHANNEL_ID configured. Alerts will not be sent!')
         
         self.loop.create_task(self.monitor_cpu())
     
@@ -44,21 +59,68 @@ class CPUMonitorBot(discord.Client):
         if message.author == self.user:
             return
         
-        print(f'Received message from {message.author.name} (ID: {message.author.id}): {message.content}')
+        content = message.content.strip()
         
-        # Only respond to DMs from the configured user
+        # Check if message starts with prefix or mentions the bot
+        is_command = False
+        command_text = ""
+        
+        if content.startswith(COMMAND_PREFIX):
+            is_command = True
+            command_text = content[len(COMMAND_PREFIX):].lower().strip()
+        elif self.user.mentioned_in(message):
+            is_command = True
+            # Remove the mention and get the command
+            command_text = message.content.replace(f'<@{self.user.id}>', '').replace(f'<@!{self.user.id}>', '').strip().lower()
+        
+        if not is_command:
+            return
+        
+        print(f'Command from {message.author.name} in {message.channel}: {command_text}')
+        
+        # Check permissions - DMs from configured user or messages in configured channel
+        has_permission = False
         if isinstance(message.channel, discord.DMChannel) and message.author.id == USER_ID:
-            content = message.content.lower().strip()
-            
-            if content in ['!status', '!stats', '!cpu']:
-                await self.send_status(message.channel)
-            elif content in ['!help', '!commands']:
-                await self.send_help(message.channel)
-            elif content == '!test':
-                await self.send_test_alert(message.channel)
-            else:
-                # Send help if command not recognized
-                await message.channel.send("Unknown command. Try `!help` for available commands.")
+            has_permission = True
+        elif CHANNEL_ID and message.channel.id == CHANNEL_ID:
+            has_permission = True
+        elif isinstance(message.channel, discord.TextChannel):
+            # Allow in any server channel if CHANNEL_ID is not set
+            if not CHANNEL_ID:
+                has_permission = True
+        
+        if not has_permission:
+            return
+        
+        # Process commands
+        if command_text in ['status', 'stats', 'cpu']:
+            await self.send_status(message.channel)
+        elif command_text in ['help', 'commands']:
+            await self.send_help(message.channel)
+        elif command_text == 'test':
+            await self.send_test_alert(message.channel)
+        elif command_text == 'ping':
+            await message.channel.send('🏓 Pong!')
+        elif command_text:
+            await message.channel.send(f"Unknown command. Try `{COMMAND_PREFIX}help` for available commands.")
+    
+    async def get_alert_destination(self):
+        """Get the configured alert destination (channel or user DM)"""
+        if self.channel_cache:
+            return self.channel_cache
+        elif self.user_cache:
+            return self.user_cache
+        elif CHANNEL_ID:
+            try:
+                return await self.fetch_channel(CHANNEL_ID)
+            except Exception as e:
+                print(f'Error fetching channel {CHANNEL_ID}: {e}')
+        elif USER_ID:
+            try:
+                return await self.fetch_user(USER_ID)
+            except Exception as e:
+                print(f'Error fetching user {USER_ID}: {e}')
+        return None
     
     async def send_status(self, channel=None):
         """Send current system status"""
@@ -66,6 +128,8 @@ class CPUMonitorBot(discord.Client):
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
             load_avg = psutil.getloadavg() if hasattr(psutil, 'getloadavg') else (0, 0, 0)
+            
+            alert_mode = "DM" if USER_ID and not CHANNEL_ID else f"Channel"
             
             message = f"""📊 **System Status**
 
@@ -76,25 +140,30 @@ class CPUMonitorBot(discord.Client):
 **Time:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 **Alert Threshold:** {CPU_THRESHOLD}%
+**Alert Mode:** {alert_mode}
 **Next check in:** ~{CHECK_INTERVAL} seconds"""
             
             if channel:
                 await channel.send(message)
             else:
-                # Send to cached user
-                if self.user_cache:
-                    await self.user_cache.send(message)
+                # Send to configured destination
+                destination = await self.get_alert_destination()
+                if destination:
+                    await destination.send(message)
                 else:
-                    user = await self.fetch_user(USER_ID)
-                    await user.send(message)
+                    print('No alert destination configured!')
+                    return False
             
-            print(f'Status sent to user {USER_ID}')
+            print(f'Status sent')
             return True
             
         except Exception as e:
             error_msg = f'Error getting status: {e}'
             if channel:
-                await channel.send(error_msg)
+                try:
+                    await channel.send(error_msg)
+                except:
+                    pass
             print(f'Error sending status: {e}')
             return False
     
@@ -102,22 +171,25 @@ class CPUMonitorBot(discord.Client):
         """Send help message with available commands"""
         help_text = f"""🤖 **CPU Monitor Bot - Commands**
 
-**Discord Commands (DM the bot):**
-• !status (or !stats, !cpu) - Get current system status
-• !test - Send a test alert
-• !help (or !commands) - Show this message
+**Discord Commands:**
+• `{COMMAND_PREFIX}status` (or stats, cpu) - Get current system status
+• `{COMMAND_PREFIX}test` - Send a test alert
+• `{COMMAND_PREFIX}ping` - Check if bot is responsive
+• `{COMMAND_PREFIX}help` (or commands) - Show this message
+• `@{self.user.name} status` - Mention the bot with a command
 
 **HTTP Endpoint:**
-• curl http://localhost:{HTTP_PORT}/status
-• curl http://localhost:{HTTP_PORT}/test
+• `curl http://localhost:{HTTP_PORT}/status`
+• `curl http://localhost:{HTTP_PORT}/test`
 
 **Current Configuration:**
 • Threshold: {CPU_THRESHOLD}%
 • Check Interval: {CHECK_INTERVAL}s
-• Alert Cooldown: {COOLDOWN_PERIOD}s"""
+• Alert Cooldown: {COOLDOWN_PERIOD}s
+• Alert via: {"Channel" if CHANNEL_ID else "DM"}"""
         
         await channel.send(help_text)
-        print(f'Help sent to user {USER_ID}')
+        print(f'Help sent')
     
     async def send_test_alert(self, channel=None):
         """Send a test alert"""
@@ -139,20 +211,24 @@ This is a test alert. Real alerts look like this!"""
             if channel:
                 await channel.send(message)
             else:
-                # Send to cached user
-                if self.user_cache:
-                    await self.user_cache.send(message)
+                # Send to configured destination
+                destination = await self.get_alert_destination()
+                if destination:
+                    await destination.send(message)
                 else:
-                    user = await self.fetch_user(USER_ID)
-                    await user.send(message)
+                    print('No alert destination configured!')
+                    return False
             
-            print(f'Test alert sent to user {USER_ID}')
+            print(f'Test alert sent')
             return True
             
         except Exception as e:
             error_msg = f'Error sending test alert: {e}'
             if channel:
-                await channel.send(error_msg)
+                try:
+                    await channel.send(error_msg)
+                except:
+                    pass
             print(f'Error sending test alert: {e}')
             return False
         
@@ -185,7 +261,10 @@ This is a test alert. Real alerts look like this!"""
     
     async def send_alert(self, cpu_percent):
         try:
-            user = await self.fetch_user(USER_ID)
+            destination = await self.get_alert_destination()
+            if not destination:
+                print('ERROR: No alert destination configured!')
+                return
             
             # Get additional system info
             memory = psutil.virtual_memory()
@@ -201,11 +280,15 @@ This is a test alert. Real alerts look like this!"""
 
 Your CPU usage has exceeded the threshold!"""
             
-            await user.send(message)
-            print(f'Alert sent to user {USER_ID}')
+            await destination.send(message)
+            
+            if isinstance(destination, discord.TextChannel):
+                print(f'Alert sent to channel #{destination.name}')
+            else:
+                print(f'Alert sent via DM')
             
         except discord.errors.Forbidden:
-            print(f'Cannot send DM to user {USER_ID}. Make sure the bot can DM you.')
+            print(f'Cannot send message. Check bot permissions.')
         except Exception as e:
             print(f'Error sending alert: {e}')
 
@@ -215,8 +298,10 @@ def main():
         print('Error: DISCORD_BOT_TOKEN environment variable is required')
         return
     
-    if not USER_ID:
-        print('Error: DISCORD_USER_ID environment variable is required')
+    if not USER_ID and not CHANNEL_ID:
+        print('Error: Either DISCORD_USER_ID or DISCORD_CHANNEL_ID must be set')
+        print('  - Set DISCORD_USER_ID to send alerts via DM')
+        print('  - Set DISCORD_CHANNEL_ID to send alerts to a server channel')
         return
     
     # Create the bot

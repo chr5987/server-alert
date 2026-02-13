@@ -5,11 +5,13 @@ A Docker-based bot that monitors your Linux system's CPU usage and sends you Dis
 ## Features
 
 - 🔍 Monitors host CPU usage (not container CPU)
-- 📨 Sends Discord DMs when CPU exceeds threshold
+- 📨 Sends Discord alerts via DM **or** server channel
+- 💬 Responds to commands in DMs and servers
 - ⏱️ Configurable check interval and alert cooldown
 - 🐳 Fully containerized with Docker
 - 🔄 Auto-restart on failure
 - 📊 Includes memory usage and load average in alerts
+- 🌐 HTTP API for manual triggers
 
 ## Prerequisites
 
@@ -32,12 +34,21 @@ A Docker-based bot that monitors your Linux system's CPU usage and sends you Dis
 9. Select bot permissions: `Send Messages`
 10. Copy the generated URL and open it in your browser to invite the bot to a server (or just use it for DMs)
 
-### 2. Get Your Discord User ID
+### 2. Get Your Discord User ID or Channel ID
 
+**Option A: DM Alerts (sends to you privately)**
 1. Open Discord
 2. Go to User Settings > Advanced
 3. Enable "Developer Mode"
 4. Right-click on your username anywhere and select "Copy ID"
+5. Use this as `DISCORD_USER_ID`
+
+**Option B: Server Channel Alerts (posts in a channel)**
+1. Enable "Developer Mode" in Discord (User Settings > Advanced)
+2. Right-click on the channel where you want alerts
+3. Select "Copy ID"
+4. Use this as `DISCORD_CHANNEL_ID`
+5. Make sure the bot has permission to send messages in that channel!
 
 ### 3. Configure the Bot
 
@@ -50,11 +61,21 @@ A Docker-based bot that monitors your Linux system's CPU usage and sends you Dis
 3. Edit `.env` and fill in your details:
    ```env
    DISCORD_BOT_TOKEN=your_actual_bot_token
-   DISCORD_USER_ID=your_actual_user_id
+   
+   # Choose ONE or BOTH alert destinations:
+   DISCORD_USER_ID=your_actual_user_id          # For DM alerts
+   # DISCORD_CHANNEL_ID=your_channel_id         # For server channel alerts
+   
    CPU_THRESHOLD=80
    CHECK_INTERVAL=60
    COOLDOWN_PERIOD=300
    ```
+
+   **Alert Destination:**
+   - Set `DISCORD_USER_ID` to receive alerts via DM
+   - Set `DISCORD_CHANNEL_ID` to post alerts in a server channel
+   - Set both if you want channel alerts but DM commands
+   - The bot will use channel alerts over DMs if both are set
 
 ### 4. Run the Bot
 
@@ -95,21 +116,32 @@ Check interval: 60 seconds
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DISCORD_BOT_TOKEN` | *required* | Your Discord bot token |
-| `DISCORD_USER_ID` | *required* | Your Discord user ID |
+| `DISCORD_USER_ID` | *optional* | Your Discord user ID (for DM alerts) |
+| `DISCORD_CHANNEL_ID` | *optional* | Channel ID (for server alerts) |
 | `CPU_THRESHOLD` | 80 | CPU percentage threshold for alerts |
 | `CHECK_INTERVAL` | 60 | How often to check CPU (seconds) |
 | `COOLDOWN_PERIOD` | 300 | Minimum time between alerts (seconds) |
 | `HTTP_PORT` | 8080 | Port for HTTP trigger endpoints |
+| `COMMAND_PREFIX` | ! | Prefix for Discord commands |
+
+**Note:** Set either `DISCORD_USER_ID` (for DM alerts) or `DISCORD_CHANNEL_ID` (for server channel alerts), or both!
 
 ## Bot Commands
 
 ### Discord Commands
-You can DM the bot these commands:
+The bot responds to commands in **DMs** (from configured user) and **server channels** (if CHANNEL_ID is set, only in that channel; otherwise in any channel).
+
+**Command formats:**
+```
+!status          (using prefix)
+@BotName status  (mentioning the bot)
+```
 
 | Command | Description |
 |---------|-------------|
 | `!status` (or `!stats`, `!cpu`) | Get current CPU, memory, and load average |
 | `!test` | Send a test alert to see what alerts look like |
+| `!ping` | Check if bot is responsive |
 | `!help` (or `!commands`) | Show available commands |
 
 **Note:** Discord commands require "Message Content Intent" enabled in your bot settings.
@@ -139,9 +171,13 @@ curl http://your-server-ip:8080/status
 
 1. The bot monitors your **host system's** CPU usage (not the container's)
 2. Every `CHECK_INTERVAL` seconds, it checks the current CPU percentage
-3. If CPU > `CPU_THRESHOLD`, it sends you a Discord DM
+3. If CPU > `CPU_THRESHOLD`, it sends an alert:
+   - To your DMs if `DISCORD_USER_ID` is set
+   - To a server channel if `DISCORD_CHANNEL_ID` is set
+   - If both are set, it uses the channel (you can still use commands in DMs)
 4. To prevent spam, it won't send another alert until `COOLDOWN_PERIOD` has passed
 5. The alert includes CPU usage, memory usage, load average, and timestamp
+6. You can trigger manual status checks via Discord commands or HTTP endpoints
 
 ## Troubleshooting
 
