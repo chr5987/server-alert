@@ -99,10 +99,12 @@ Check interval: 60 seconds
 | `CPU_THRESHOLD` | 80 | CPU percentage threshold for alerts |
 | `CHECK_INTERVAL` | 60 | How often to check CPU (seconds) |
 | `COOLDOWN_PERIOD` | 300 | Minimum time between alerts (seconds) |
+| `HTTP_PORT` | 8080 | Port for HTTP trigger endpoints |
 
 ## Bot Commands
 
-You can DM the bot these commands to interact with it:
+### Discord Commands
+You can DM the bot these commands:
 
 | Command | Description |
 |---------|-------------|
@@ -110,15 +112,28 @@ You can DM the bot these commands to interact with it:
 | `!test` | Send a test alert to see what alerts look like |
 | `!help` (or `!commands`) | Show available commands |
 
-**Example:**
-```
-You: !status
+**Note:** Discord commands require "Message Content Intent" enabled in your bot settings.
 
-Bot: 📊 System Status
-     CPU Usage: 45.2%
-     Memory Usage: 62.1%
-     ...
+### HTTP Endpoints (Recommended)
+The bot also runs an HTTP server for more reliable manual triggers:
+
+```bash
+# Get current status
+curl http://localhost:8080/status
+
+# Send test alert
+curl http://localhost:8080/test
+
+# Get bot info
+curl http://localhost:8080/info
 ```
+
+You can also trigger from anywhere on your network:
+```bash
+curl http://your-server-ip:8080/status
+```
+
+**These HTTP endpoints are much more reliable than Discord commands!**
 
 ## How It Works
 
@@ -129,6 +144,14 @@ Bot: 📊 System Status
 5. The alert includes CPU usage, memory usage, load average, and timestamp
 
 ## Troubleshooting
+
+### Discord commands not working
+
+If `!status` and other commands don't work:
+1. **Use HTTP endpoints instead** (more reliable): `curl http://localhost:8080/status`
+2. Make sure "Message Content Intent" is enabled in Discord Developer Portal
+3. Check the logs for "Received message from..." to see if bot is receiving messages
+4. Try restarting the bot after enabling the intent
 
 ### Bot can't send me DMs
 

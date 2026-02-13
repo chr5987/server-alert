@@ -15,3 +15,6 @@ services:
     # Use host PID namespace to see host processes
     pid: host
     network_mode: bridge
+    # Expose HTTP port for manual triggers
+    ports:
+      - "8080:8080"

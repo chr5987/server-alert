@@ -3,6 +3,8 @@ import psutil
 import asyncio
 import os
 from datetime import datetime
+from aiohttp import web
+import threading
 
 # Configuration from environment variables
 DISCORD_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -10,6 +12,7 @@ USER_ID = int(os.getenv('DISCORD_USER_ID'))
 CPU_THRESHOLD = int(os.getenv('CPU_THRESHOLD', '80'))
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 COOLDOWN_PERIOD = int(os.getenv('COOLDOWN_PERIOD', '300'))  # 5 minutes default
+HTTP_PORT = int(os.getenv('HTTP_PORT', '8080'))
 
 class CPUMonitorBot(discord.Client):
     def __init__(self):
@@ -17,19 +20,31 @@ class CPUMonitorBot(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
         self.last_alert_time = None
+        self.user_cache = None
         
     async def on_ready(self):
         print(f'Logged in as {self.user}')
         print(f'Monitoring CPU usage. Threshold: {CPU_THRESHOLD}%')
         print(f'Check interval: {CHECK_INTERVAL} seconds')
         print(f'Alert cooldown: {COOLDOWN_PERIOD} seconds')
-        print(f'Commands: !status, !help')
+        print(f'HTTP endpoint: http://localhost:{HTTP_PORT}')
+        print(f'Commands: !status, !help, or curl http://localhost:{HTTP_PORT}/status')
+        
+        # Cache the user object
+        try:
+            self.user_cache = await self.fetch_user(USER_ID)
+            print(f'Cached user: {self.user_cache.name}')
+        except Exception as e:
+            print(f'Warning: Could not cache user: {e}')
+        
         self.loop.create_task(self.monitor_cpu())
     
     async def on_message(self, message):
         # Ignore messages from the bot itself
         if message.author == self.user:
             return
+        
+        print(f'Received message from {message.author.name} (ID: {message.author.id}): {message.content}')
         
         # Only respond to DMs from the configured user
         if isinstance(message.channel, discord.DMChannel) and message.author.id == USER_ID:
@@ -41,8 +56,11 @@ class CPUMonitorBot(discord.Client):
                 await self.send_help(message.channel)
             elif content == '!test':
                 await self.send_test_alert(message.channel)
+            else:
+                # Send help if command not recognized
+                await message.channel.send("Unknown command. Try `!help` for available commands.")
     
-    async def send_status(self, channel):
+    async def send_status(self, channel=None):
         """Send current system status"""
         try:
             cpu_percent = psutil.cpu_percent(interval=1)
@@ -60,25 +78,38 @@ class CPUMonitorBot(discord.Client):
 **Alert Threshold:** {CPU_THRESHOLD}%
 **Next check in:** ~{CHECK_INTERVAL} seconds"""
             
-            await channel.send(message)
+            if channel:
+                await channel.send(message)
+            else:
+                # Send to cached user
+                if self.user_cache:
+                    await self.user_cache.send(message)
+                else:
+                    user = await self.fetch_user(USER_ID)
+                    await user.send(message)
+            
             print(f'Status sent to user {USER_ID}')
+            return True
             
         except Exception as e:
-            await channel.send(f'Error getting status: {e}')
+            error_msg = f'Error getting status: {e}'
+            if channel:
+                await channel.send(error_msg)
             print(f'Error sending status: {e}')
+            return False
     
     async def send_help(self, channel):
         """Send help message with available commands"""
         help_text = f"""🤖 **CPU Monitor Bot - Commands**
 
-**!status** (or !stats, !cpu)
-Get current system status
+**Discord Commands (DM the bot):**
+• !status (or !stats, !cpu) - Get current system status
+• !test - Send a test alert
+• !help (or !commands) - Show this message
 
-**!test**
-Send a test alert (same format as threshold alerts)
-
-**!help** (or !commands)
-Show this help message
+**HTTP Endpoint:**
+• curl http://localhost:{HTTP_PORT}/status
+• curl http://localhost:{HTTP_PORT}/test
 
 **Current Configuration:**
 • Threshold: {CPU_THRESHOLD}%
@@ -88,7 +119,7 @@ Show this help message
         await channel.send(help_text)
         print(f'Help sent to user {USER_ID}')
     
-    async def send_test_alert(self, channel):
+    async def send_test_alert(self, channel=None):
         """Send a test alert"""
         try:
             cpu_percent = psutil.cpu_percent(interval=1)
@@ -105,12 +136,25 @@ Show this help message
 
 This is a test alert. Real alerts look like this!"""
             
-            await channel.send(message)
+            if channel:
+                await channel.send(message)
+            else:
+                # Send to cached user
+                if self.user_cache:
+                    await self.user_cache.send(message)
+                else:
+                    user = await self.fetch_user(USER_ID)
+                    await user.send(message)
+            
             print(f'Test alert sent to user {USER_ID}')
+            return True
             
         except Exception as e:
-            await channel.send(f'Error sending test alert: {e}')
+            error_msg = f'Error sending test alert: {e}'
+            if channel:
+                await channel.send(error_msg)
             print(f'Error sending test alert: {e}')
+            return False
         
     async def monitor_cpu(self):
         await self.wait_until_ready()
@@ -175,9 +219,74 @@ def main():
         print('Error: DISCORD_USER_ID environment variable is required')
         return
     
-    # Create and run the bot
+    # Create the bot
     client = CPUMonitorBot()
-    client.run(DISCORD_TOKEN)
+    
+    # Setup HTTP server for manual triggers
+    app = web.Application()
+    
+    async def handle_status(request):
+        """HTTP endpoint to trigger status message"""
+        try:
+            success = await client.send_status()
+            if success:
+                return web.Response(text='Status sent to Discord\n')
+            else:
+                return web.Response(text='Failed to send status\n', status=500)
+        except Exception as e:
+            return web.Response(text=f'Error: {e}\n', status=500)
+    
+    async def handle_test(request):
+        """HTTP endpoint to trigger test alert"""
+        try:
+            success = await client.send_test_alert()
+            if success:
+                return web.Response(text='Test alert sent to Discord\n')
+            else:
+                return web.Response(text='Failed to send test alert\n', status=500)
+        except Exception as e:
+            return web.Response(text=f'Error: {e}\n', status=500)
+    
+    async def handle_info(request):
+        """HTTP endpoint to get bot info"""
+        info = f"""CPU Monitor Bot
+
+Endpoints:
+  GET /status - Send status message to Discord
+  GET /test   - Send test alert to Discord
+  GET /info   - This page
+
+Configuration:
+  CPU Threshold: {CPU_THRESHOLD}%
+  Check Interval: {CHECK_INTERVAL}s
+  Cooldown Period: {COOLDOWN_PERIOD}s
+  Discord User ID: {USER_ID}
+
+Usage:
+  curl http://localhost:{HTTP_PORT}/status
+  curl http://localhost:{HTTP_PORT}/test
+"""
+        return web.Response(text=info)
+    
+    app.router.add_get('/status', handle_status)
+    app.router.add_get('/test', handle_test)
+    app.router.add_get('/info', handle_info)
+    app.router.add_get('/', handle_info)
+    
+    # Run HTTP server in background
+    async def run_web_server():
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', HTTP_PORT)
+        await site.start()
+        print(f'HTTP server started on port {HTTP_PORT}')
+    
+    # Start both the bot and web server
+    async def run_both():
+        await run_web_server()
+        await client.start(DISCORD_TOKEN)
+    
+    asyncio.run(run_both())
 
 if __name__ == '__main__':
     main()
