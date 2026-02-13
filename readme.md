@@ -26,7 +26,7 @@ A Docker-based bot that monitors your Linux system's CPU usage and sends you Dis
 3. Go to the "Bot" section
 4. Click "Add Bot"
 5. Under "TOKEN", click "Reset Token" and copy it (you'll need this)
-6. Under "Privileged Gateway Intents", enable "Message Content Intent" (optional but recommended)
+6. **Important:** Under "Privileged Gateway Intents", enable **"Message Content Intent"** (required for commands)
 7. Go to "OAuth2" > "URL Generator"
 8. Select scopes: `bot`
 9. Select bot permissions: `Send Messages`
@@ -99,6 +99,26 @@ Check interval: 60 seconds
 | `CPU_THRESHOLD` | 80 | CPU percentage threshold for alerts |
 | `CHECK_INTERVAL` | 60 | How often to check CPU (seconds) |
 | `COOLDOWN_PERIOD` | 300 | Minimum time between alerts (seconds) |
+
+## Bot Commands
+
+You can DM the bot these commands to interact with it:
+
+| Command | Description |
+|---------|-------------|
+| `!status` (or `!stats`, `!cpu`) | Get current CPU, memory, and load average |
+| `!test` | Send a test alert to see what alerts look like |
+| `!help` (or `!commands`) | Show available commands |
+
+**Example:**
+```
+You: !status
+
+Bot: 📊 System Status
+     CPU Usage: 45.2%
+     Memory Usage: 62.1%
+     ...
+```
 
 ## How It Works
 
