@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  cpu-monitor:
+    build: .
+    container_name: cpu-monitor-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Mount /proc to monitor host CPU instead of container CPU
+    volumes:
+      - /proc:/host/proc:ro
+    environment:
+      - HOST_PROC=/host/proc
+    # Use host PID namespace to see host processes
+    pid: host
+    network_mode: bridge
